@@ -1,0 +1,101 @@
+#include <Arduino.h>
+uint8_t header[4] ;
+#define START_BYTE 0xAA
+#define MAX_PAYLOAD_SIZE 1024
+
+//Status Codes used for ack method:
+#define ACK_OK          0x00
+#define ACK_BAD_START   0x01
+#define ACK_BAD_LENGTH  0x02
+#define ACK_TIMEOUT     0x03
+#define ACK_BAD_CRC     0x04
+
+struct Packet{
+    uint8_t start;
+    uint8_t id ;
+    uint16_t length ;
+    uint8_t payload[1024] ;
+    uint16_t crc ;
+};
+
+
+Packet rxPacket ;
+
+uint16_t calculateCRC(const Packet &packet){
+    uint16_t checksum = 0 ;
+    checksum += packet.start ;
+    checksum += packet.id ;
+
+    checksum += (packet.length >> 8) ;
+    checksum += (packet.length & 0xFF) ;
+
+    for(uint16_t i = 0; i < packet.length; i++){
+        checksum += packet.payload[i] ;
+    }
+
+    return checksum ;
+}
+
+bool receivePacket(Packet &packet){
+    while(Serial.available() < 4) {
+        return false; 
+    }
+
+    packet.start = Serial.read() ;
+    if(packet.start != START_BYTE){
+        return false; 
+    }
+
+    packet.id = Serial.read() ;
+    uint8_t high = Serial.read() ;
+    uint8_t low = Serial.read() ;
+
+    packet.length = (high << 8) | low ;
+    if(packet.length > MAX_PAYLOAD_SIZE){
+        return false ;
+    }
+
+    size_t bytesRead = Serial.readBytes(packet.payload, packet.length) ;
+    if(bytesRead != packet.length){
+        return false; 
+    }
+
+    uint8_t crchigh = Serial.read() ;
+    uint8_t crclow = Serial.read() ;
+
+    packet.crc = (crchigh << 8) | crclow ;
+
+    uint16_t calculated = calculateCRC(packet) ; 
+    if(calculated != packet.crc){
+        return false; 
+    }
+    return true; 
+}
+
+void sendAck(uint8_t packetID, uint8_t status){
+    Packet acknowledgement; 
+    acknowledgement.start = START_BYTE ;
+    acknowledgement.id = packetID ;
+    acknowledgement.length = 1 ;
+    acknowledgement.payload[0] = status ;
+    acknowledgement.crc = calculateCRC(acknowledgement) ;
+
+    Serial.write(acknowledgement.start) ;
+    Serial.write(acknowledgement.id) ;
+    Serial.write((acknowledgement.length >> 8) & 0xFF) ;
+    Serial.write(acknowledgement.length & 0xFF)  ;
+    Serial.write(acknowledgement.payload, acknowledgement.length) ;
+    Serial.write((acknowledgement.crc >> 8) & 0xFF) ;
+    Serial.write(acknowledgement.crc & 0xFF) ;
+}
+
+void setup(){
+    Serial.begin(115200);
+    delay(2000);
+    Serial.print("READY") ;
+}
+void loop(){
+    if (receivePacket(rxPacket)){
+        sendAck(rxPacket.id, ACK_OK) ;
+    }
+}
